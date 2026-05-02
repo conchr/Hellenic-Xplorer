@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hellenic Production Explorer | V16.2 - Absolute API Fix</title>
+    <title>Hellenic Production Explorer | V16.3 - Universal API Syntax</title>
     
     <!-- PWA Meta Tags -->
     <meta name="mobile-web-app-capable" content="yes">
@@ -126,9 +126,9 @@
             const [isPaidTier, setIsPaidTier] = useState(() => localStorage.getItem('hst_is_paid_tier') === 'true');
             const [copyFeedback, setCopyFeedback] = useState(null);
             
-            // Persistence Settings
+            // Persistence Settings (AI Data is saved here automatically)
             const [apiKey, setApiKey] = useState(() => localStorage.getItem('hst_api_key') || "");
-            const [modelId, setModelId] = useState(() => localStorage.getItem('hst_model_id') || "gemini-2.5-flash-preview-09-2025");
+            const [modelId, setModelId] = useState(() => localStorage.getItem('hst_model_id') || "gemini-1.5-flash");
             
             const [smartLibrary, setSmartLibrary] = useState(() => {
                 try { return JSON.parse(localStorage.getItem('hst_smart_library')) || {}; } catch(e) { return {}; }
@@ -142,6 +142,7 @@
             const [analysisLoading, setAnalysisLoading] = useState(false);
             const [showApiModal, setShowApiModal] = useState(false);
 
+            // Αποθήκευση Δεδομένων σε Πραγματικό Χρόνο (Persists keywords & Prompts)
             useEffect(() => {
                 localStorage.setItem('hst_smart_library', JSON.stringify(smartLibrary));
                 localStorage.setItem('hst_folder_statuses', JSON.stringify(folderStatuses));
@@ -176,11 +177,8 @@
                 
                 // Πρωτόκολλο Ασφαλείας Μοντέλων
                 if (!effectiveKey) {
-                    // Αν είμαστε στο Canvas χωρίς κλειδί, επιβάλλεται το preview μοντέλο
                     actualModelId = "gemini-2.5-flash-preview-09-2025";
                 } else if (actualModelId.includes("preview")) {
-                    // Αν ο χρήστης βάλει προσωπικό κλειδί αλλά αφήσει το preview μοντέλο, 
-                    // γυρνάμε σε 1.5-flash για να αποφύγουμε το σφάλμα 404 (Not Found).
                     actualModelId = "gemini-1.5-flash"; 
                 }
                 
@@ -204,7 +202,6 @@
                                 canvas.width = width; canvas.height = height;
                                 const ctx = canvas.getContext('2d');
                                 ctx.drawImage(img, 0, 0, width, height);
-                                // ΚΡΙΣΙΜΟ: Το proxy του Canvas απαιτεί αυστηρά image/png
                                 resolve(canvas.toDataURL('image/png').split(',')[1]);
                             };
                         };
@@ -216,17 +213,30 @@
                     
                     const url = `https://generativelanguage.googleapis.com/v1beta/models/${actualModelId}:generateContent?key=${effectiveKey}`;
                     
-                    // ΚΡΙΣΙΜΟ: Το JSON payload πρέπει να έχει camelCase (inlineData, mimeType) και mimeType "image/png"
+                    // ΚΡΙΣΙΜΗ ΑΛΛΑΓΗ: Δυναμικό Payload. Το κανονικό API θέλει snake_case, το Proxy του Canvas θέλει camelCase.
+                    const payloadParts = [
+                        { text: promptText }
+                    ];
+
+                    if (effectiveKey) {
+                        // Εξωτερική χρήση (GitHub) με προσωπικό Key
+                        payloadParts.push({
+                            inline_data: { mime_type: "image/png", data: base64Data }
+                        });
+                    } else {
+                        // Εσωτερική χρήση στο Canvas
+                        payloadParts.push({
+                            inlineData: { mimeType: "image/png", data: base64Data }
+                        });
+                    }
+
                     const response = await fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             contents: [{
                                 role: "user",
-                                parts: [
-                                    { text: promptText },
-                                    { inlineData: { mimeType: "image/png", data: base64Data } }
-                                ]
+                                parts: payloadParts
                             }]
                         })
                     });
@@ -343,12 +353,16 @@
                             <input type="file" ref={fileInputRef} webkitdirectory="true" className="hidden" onChange={handleFileChange} />
                             <div className="max-w-md w-full animate-fade-in">
                                 <h1 className="text-4xl font-extrabold mb-4 tracking-[0.4em] text-[#e2b85a] uppercase">HELLENIC EXPLORER</h1>
-                                <p className="text-zinc-600 uppercase tracking-widest text-[10px] mb-8 font-bold">V16.2 | Absolute API Fix</p>
+                                <p className="text-zinc-600 uppercase tracking-widest text-[10px] mb-8 font-bold">V16.3 | Universal API Sync</p>
                                 
                                 <div className="space-y-4">
                                     <button onClick={() => fileInputRef.current.click()} className="bg-[#e2b85a] text-black w-full py-6 rounded-2xl font-black uppercase text-xs tracking-[0.2em] hover:scale-[1.02] active:scale-[0.98] transition-all shadow-2xl shadow-[#e2b85a]/10 flex items-center justify-center">
                                         <FAIcon name="fa-solid fa-folder-tree" className="mr-3" /> Connect Production Drive
                                     </button>
+                                    
+                                    <p className="text-[9px] text-zinc-500 uppercase tracking-widest px-4 font-bold">
+                                        Note: Local files are re-scanned for security, but your AI keywords & prompts are instantly restored from memory.
+                                    </p>
                                     
                                     <button onClick={() => setShowApiModal(true)} className={`w-full py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest border transition-all flex items-center justify-center gap-2 ${apiKey ? 'bg-emerald-950/20 text-emerald-500 border-emerald-900/50 hover:bg-emerald-900/40' : 'bg-zinc-900/50 text-zinc-400 border-zinc-800 hover:text-[#e2b85a] hover:border-[#e2b85a]'}`}>
                                         <FAIcon name="fa-solid fa-key" /> {apiKey ? 'API KEY CONFIGURED - EDIT SETTINGS' : 'SET GOOGLE API KEY (OPTIONAL FOR PREVIEW)'}
