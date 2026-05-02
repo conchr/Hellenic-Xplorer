@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hellenic Production Explorer | V16.5 - Universal Payload Fix</title>
+    <title>Hellenic Production Explorer | V16.6 - Bulletproof Engine</title>
     
     <!-- PWA Meta Tags -->
     <meta name="mobile-web-app-capable" content="yes">
@@ -175,88 +175,132 @@
 
             const performSmartAnalysis = async (asset, isBatch = false) => {
                 const effectiveKey = apiKey.trim(); 
-                let actualModelId = modelId.replace('models/', '').trim();
+                let currentModel = modelId.replace('models/', '').trim() || 'gemini-1.5-flash';
                 
-                // Πρωτόκολλο Ασφαλείας Μοντέλων
+                // Πρωτόκολλο Ασφαλείας Μοντέλων - Καθορισμός αρχικού μοντέλου
                 if (!effectiveKey) {
-                    actualModelId = "gemini-2.5-flash-preview-09-2025";
-                } else if (actualModelId.includes("preview")) {
-                    actualModelId = "gemini-1.5-flash"; 
+                    currentModel = "gemini-2.5-flash-preview-09-2025";
+                } else if (currentModel.includes("preview")) {
+                    currentModel = "gemini-1.5-flash"; 
                 }
                 
                 if (!isBatch) setAnalysisLoading(true);
 
-                try {
-                    if (isBatch && abortBatchRef.current) return { success: false, error: "Ακυρώθηκε από τον χρήστη." };
+                return new Promise(async (resolve) => {
+                    try {
+                        if (isBatch && abortBatchRef.current) {
+                            resolve({ success: false, error: "Ακυρώθηκε από τον χρήστη." });
+                            return;
+                        }
 
-                    const reader = new FileReader();
-                    const base64Data = await new Promise((resolve) => {
-                        reader.readAsDataURL(asset.file);
-                        reader.onload = (e) => {
-                            const img = new Image();
-                            img.src = e.target.result;
-                            img.onload = () => {
-                                const canvas = document.createElement('canvas');
-                                const MAX_DIM = 768; 
-                                let { width, height } = img;
-                                if (width > height && width > MAX_DIM) { height *= MAX_DIM / width; width = MAX_DIM; }
-                                else if (height > MAX_DIM) { width *= MAX_DIM / height; height = MAX_DIM; }
-                                canvas.width = width; canvas.height = height;
-                                const ctx = canvas.getContext('2d');
-                                ctx.drawImage(img, 0, 0, width, height);
-                                resolve(canvas.toDataURL('image/png').split(',')[1]);
+                        // V16.6 - Μείωση Μεγέθους Payload: JPEG εξωτερικά, PNG εσωτερικά
+                        const outMimeType = effectiveKey ? 'image/jpeg' : 'image/png';
+
+                        const base64Data = await new Promise((res) => {
+                            const reader = new FileReader();
+                            reader.readAsDataURL(asset.file);
+                            reader.onload = (e) => {
+                                const img = new Image();
+                                img.src = e.target.result;
+                                img.onload = () => {
+                                    const canvas = document.createElement('canvas');
+                                    const MAX_DIM = 768; 
+                                    let { width, height } = img;
+                                    if (width > height && width > MAX_DIM) { height *= MAX_DIM / width; width = MAX_DIM; }
+                                    else if (height > MAX_DIM) { width *= MAX_DIM / height; height = MAX_DIM; }
+                                    canvas.width = width; canvas.height = height;
+                                    const ctx = canvas.getContext('2d');
+                                    ctx.drawImage(img, 0, 0, width, height);
+                                    res(canvas.toDataURL(outMimeType, 0.8).split(',')[1]);
+                                };
                             };
-                        };
-                    });
+                        });
 
-                    const promptText = `Analyze image and return raw JSON. NO markdown.
-                    Format: {"keywords": ["w1", ..., "w15"], "imagePrompt": "...", "videoPrompt": "..."}.
-                    Keywords: exactly 15. Prompts: Vertical 9:16 cinematic focus. UE5 rendering.`;
-                    
-                    const url = `https://generativelanguage.googleapis.com/v1beta/models/${actualModelId}:generateContent?key=${effectiveKey}`;
-                    
-                    // ΚΡΙΣΙΜΗ ΔΙΟΡΘΩΣΗ V16.5: Απόλυτος διαχωρισμός JSON format για Canvas vs Public API
-                    const payloadParts = [ { text: promptText } ];
-                    if (effectiveKey) {
-                        // Το δημόσιο API της Google απαιτεί αυστηρά snake_case
-                        payloadParts.push({ inline_data: { mime_type: "image/png", data: base64Data } });
-                    } else {
-                        // Ο Proxy του Canvas απαιτεί αυστηρά camelCase
-                        payloadParts.push({ inlineData: { mimeType: "image/png", data: base64Data } });
+                        const promptText = `Analyze image and return raw JSON. NO markdown.
+                        Format: {"keywords": ["w1", ..., "w15"], "imagePrompt": "...", "videoPrompt": "..."}.
+                        Keywords: exactly 15. Prompts: Vertical 9:16 cinematic focus. UE5 rendering.`;
+                        
+                        // V16.6 - Αυστηρή Δομή Payload Google REST API
+                        const payloadParts = [
+                            { text: promptText },
+                            { inlineData: { mimeType: outMimeType, data: base64Data } }
+                        ];
+
+                        const requestBody = JSON.stringify({
+                            contents: [{ parts: payloadParts }]
+                        });
+
+                        // V16.6 - Auto-Fallback Σύστημα Μοντέλων
+                        let modelsToTry = effectiveKey 
+                            ? [currentModel, 'gemini-1.5-flash-latest', 'gemini-1.5-pro', 'gemini-2.5-flash'] 
+                            : [currentModel];
+                            
+                        let response, data;
+                        let success = false;
+                        let lastError = "";
+
+                        for (let i = 0; i < modelsToTry.length; i++) {
+                            if (isBatch && abortBatchRef.current) break;
+                            
+                            const attemptModel = modelsToTry[i];
+                            const url = `https://generativelanguage.googleapis.com/v1beta/models/${attemptModel}:generateContent?key=${effectiveKey}`;
+                            
+                            try {
+                                response = await fetch(url, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: requestBody
+                                });
+                                
+                                data = await response.json();
+                                
+                                if (response.ok && data.candidates) {
+                                    success = true;
+                                    // Αποθήκευση του μοντέλου που δούλεψε για να επιταχύνουμε το επόμενο
+                                    if (effectiveKey && attemptModel !== currentModel) {
+                                        setModelId(attemptModel);
+                                    }
+                                    break;
+                                } else {
+                                    // Αν χτυπήσει limits API, ΜΗΝ αλλάξεις μοντέλο, σταμάτα για να περιμένει ο χρήστης
+                                    if (response.status === 429 || (data.error && data.error.message?.includes("Quota"))) {
+                                        throw new Error(data.error?.message || "Όριο Χρήσης Google API.");
+                                    }
+                                    
+                                    lastError = data.error?.message || `HTTP Error ${response.status}`;
+                                    console.warn(`Model ${attemptModel} failed: ${lastError}. Trying next...`);
+                                }
+                            } catch (err) {
+                                lastError = err.message;
+                                if (lastError.includes("Quota") || lastError.includes("Όριο Χρήσης")) {
+                                    throw err; 
+                                }
+                                console.warn(`Network fail for ${attemptModel}: ${lastError}`);
+                            }
+                        }
+
+                        if (!success) {
+                            throw new Error(`Όλα τα μοντέλα απέτυχαν. Τελευταίο Σφάλμα: ${lastError}`);
+                        }
+
+                        const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                        if (!aiText) throw new Error("Το API της Google δεν επέστρεψε περιεχόμενο.");
+
+                        const parsed = extractJSON(aiText.replace(/```json|```/g, '').trim());
+
+                        if (parsed && parsed.keywords) {
+                            setSmartLibrary(prev => ({ ...prev, [asset.path]: parsed }));
+                            resolve({ success: true });
+                        } else {
+                            throw new Error("Το AI επέστρεψε άκυρη μορφή: " + aiText.substring(0, 60));
+                        }
+                    } catch (e) {
+                        console.error("AI FAIL:", e.message);
+                        resolve({ success: false, error: e.message });
+                    } finally {
+                        if (!isBatch) setAnalysisLoading(false);
                     }
-
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{
-                                role: "user",
-                                parts: payloadParts
-                            }]
-                        })
-                    });
-
-                    const result = await response.json();
-                    
-                    if (result.error) throw new Error(`${result.error.message} (Model: ${actualModelId})`);
-
-                    const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (!aiText) throw new Error("Το API της Google δεν επέστρεψε περιεχόμενο.");
-
-                    const parsed = extractJSON(aiText.replace(/```json|```/g, '').trim());
-
-                    if (parsed && parsed.keywords) {
-                        setSmartLibrary(prev => ({ ...prev, [asset.path]: parsed }));
-                        return { success: true };
-                    }
-                    
-                    throw new Error("Το AI επέστρεψε άκυρη μορφή: " + aiText.substring(0, 60) + "...");
-                } catch (e) {
-                    console.error("AI FAIL:", e.message);
-                    return { success: false, error: e.message };
-                } finally {
-                    if (!isBatch) setAnalysisLoading(false);
-                }
+                });
             };
 
             const handleBatchAnalyze = async (folder) => {
@@ -358,7 +402,7 @@
                             <input type="file" ref={fileInputRef} webkitdirectory="true" className="hidden" onChange={handleFileChange} />
                             <div className="max-w-md w-full animate-fade-in">
                                 <h1 className="text-4xl font-extrabold mb-4 tracking-[0.4em] text-[#e2b85a] uppercase">HELLENIC EXPLORER</h1>
-                                <p className="text-zinc-600 uppercase tracking-widest text-[10px] mb-8 font-bold">V16.5 | Universal Payload Fix</p>
+                                <p className="text-zinc-600 uppercase tracking-widest text-[10px] mb-8 font-bold">V16.6 | Bulletproof Engine</p>
                                 
                                 <div className="space-y-4">
                                     <button onClick={() => fileInputRef.current.click()} className="bg-[#e2b85a] text-black w-full py-6 rounded-2xl font-black uppercase text-xs tracking-[0.2em] hover:scale-[1.02] active:scale-[0.98] transition-all shadow-2xl shadow-[#e2b85a]/10 flex items-center justify-center">
