@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hellenic Production Explorer | V16.4 - Error Handling</title>
+    <title>Hellenic Production Explorer | V16.5 - Universal Payload Fix</title>
     
     <!-- PWA Meta Tags -->
     <meta name="mobile-web-app-capable" content="yes">
@@ -126,10 +126,10 @@
             const [isPaidTier, setIsPaidTier] = useState(() => localStorage.getItem('hst_is_paid_tier') === 'true');
             const [copyFeedback, setCopyFeedback] = useState(null);
             
-            // ΝΕΟ: Global σύστημα εμφάνισης σφαλμάτων
+            // Global σύστημα εμφάνισης σφαλμάτων
             const [error, setError] = useState(null);
             
-            // Persistence Settings (AI Data is saved here automatically)
+            // Persistence Settings
             const [apiKey, setApiKey] = useState(() => localStorage.getItem('hst_api_key') || "");
             const [modelId, setModelId] = useState(() => localStorage.getItem('hst_model_id') || "gemini-1.5-flash");
             
@@ -145,7 +145,6 @@
             const [analysisLoading, setAnalysisLoading] = useState(false);
             const [showApiModal, setShowApiModal] = useState(false);
 
-            // Αποθήκευση Δεδομένων σε Πραγματικό Χρόνο (Persists keywords & Prompts)
             useEffect(() => {
                 localStorage.setItem('hst_smart_library', JSON.stringify(smartLibrary));
                 localStorage.setItem('hst_folder_statuses', JSON.stringify(folderStatuses));
@@ -216,11 +215,15 @@
                     
                     const url = `https://generativelanguage.googleapis.com/v1beta/models/${actualModelId}:generateContent?key=${effectiveKey}`;
                     
-                    // ΚΡΙΣΙΜΗ ΔΙΟΡΘΩΣΗ: Το Google REST API δέχεται πάντα camelCase (inlineData, mimeType).
-                    const payloadParts = [
-                        { text: promptText },
-                        { inlineData: { mimeType: "image/png", data: base64Data } }
-                    ];
+                    // ΚΡΙΣΙΜΗ ΔΙΟΡΘΩΣΗ V16.5: Απόλυτος διαχωρισμός JSON format για Canvas vs Public API
+                    const payloadParts = [ { text: promptText } ];
+                    if (effectiveKey) {
+                        // Το δημόσιο API της Google απαιτεί αυστηρά snake_case
+                        payloadParts.push({ inline_data: { mime_type: "image/png", data: base64Data } });
+                    } else {
+                        // Ο Proxy του Canvas απαιτεί αυστηρά camelCase
+                        payloadParts.push({ inlineData: { mimeType: "image/png", data: base64Data } });
+                    }
 
                     const response = await fetch(url, {
                         method: 'POST',
@@ -235,7 +238,6 @@
 
                     const result = await response.json();
                     
-                    // Αν υπάρχει error (π.χ. Quota Exceeded), θα πεταχτεί εδώ και θα πιαστεί από την catch
                     if (result.error) throw new Error(`${result.error.message} (Model: ${actualModelId})`);
 
                     const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -268,14 +270,13 @@
                 
                 abortBatchRef.current = false;
                 setBatchStatus(folder.path);
-                setError(null); // Καθαρισμός προηγούμενων σφαλμάτων
+                setError(null); 
                 
                 for (const asset of targets) {
                     if (abortBatchRef.current) break;
                     
                     const res = await performSmartAnalysis(asset, true);
                     
-                    // ΑΝ ΥΠΑΡΧΕΙ ΣΦΑΛΜΑ, ΣΤΑΜΑΤΑΜΕ ΤΟ BATCH ΑΜΕΣΩΣ ΚΑΙ ΔΕΙΧΝΟΥΜΕ ΤΟ ERROR
                     if (!res.success) {
                         setError(`BATCH ΣΤΑΜΑΤΗΣΕ: ${res.error}`);
                         break;
@@ -352,13 +353,12 @@
             return (
                 <div className="h-screen w-full bg-[#09090b] flex flex-col overflow-hidden">
                     
-                    {/* --- 1. LANDING SCREEN --- */}
                     {!isConfigured && (
                         <div className="flex-1 flex items-center justify-center p-6 text-center relative z-10">
                             <input type="file" ref={fileInputRef} webkitdirectory="true" className="hidden" onChange={handleFileChange} />
                             <div className="max-w-md w-full animate-fade-in">
                                 <h1 className="text-4xl font-extrabold mb-4 tracking-[0.4em] text-[#e2b85a] uppercase">HELLENIC EXPLORER</h1>
-                                <p className="text-zinc-600 uppercase tracking-widest text-[10px] mb-8 font-bold">V16.4 | Strict Error Control</p>
+                                <p className="text-zinc-600 uppercase tracking-widest text-[10px] mb-8 font-bold">V16.5 | Universal Payload Fix</p>
                                 
                                 <div className="space-y-4">
                                     <button onClick={() => fileInputRef.current.click()} className="bg-[#e2b85a] text-black w-full py-6 rounded-2xl font-black uppercase text-xs tracking-[0.2em] hover:scale-[1.02] active:scale-[0.98] transition-all shadow-2xl shadow-[#e2b85a]/10 flex items-center justify-center">
@@ -377,10 +377,8 @@
                         </div>
                     )}
 
-                    {/* --- 2. MAIN APP EXPLORER --- */}
                     {isConfigured && (
                         <div className="flex flex-1 overflow-hidden">
-                            {/* SIDEBAR */}
                             <aside className="w-64 bg-black/40 border-r border-zinc-900 flex flex-col p-6 z-10">
                                 <div className="mb-12">
                                     <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-500 mb-6 px-2">Project Progress</h2>
@@ -407,10 +405,8 @@
                                 </div>
                             </aside>
 
-                            {/* MAIN */}
                             <div className="flex-1 flex flex-col min-w-0 relative">
                                 
-                                {/* ERROR BANNER ALERTER */}
                                 {error && (
                                     <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[100] w-full max-w-xl bg-red-950/95 border border-red-900/80 text-red-400 p-4 rounded-2xl shadow-[0_10px_40px_rgba(220,38,38,0.2)] flex items-start gap-4 animate-fade-in backdrop-blur-md">
                                         <FAIcon name="fa-solid fa-triangle-exclamation" size={20} className="mt-1 flex-shrink-0 text-red-500" />
@@ -507,7 +503,6 @@
                         </div>
                     )}
 
-                    {/* --- 3. DETAIL MODAL (Available when Asset is Selected) --- */}
                     {selectedAsset && (
                         <div className="fixed inset-0 bg-black/98 z-[80] flex items-center justify-center p-6 backdrop-blur-md animate-fade-in">
                             <div className="bg-[#0a0a0b] border border-zinc-800/80 flex flex-col lg:flex-row w-full max-w-6xl h-full max-h-[90vh] rounded-[2.5rem] overflow-hidden shadow-2xl relative">
@@ -594,7 +589,6 @@
                         </div>
                     )}
 
-                    {/* --- 4. UNIVERSAL API SETTINGS MODAL --- */}
                     {showApiModal && (
                         <div className="fixed inset-0 bg-black/95 z-[200] flex items-center justify-center p-6 animate-fade-in backdrop-blur-sm">
                             <div className="bg-[#121214] border border-zinc-800/80 p-12 rounded-3xl w-full max-w-md shadow-2xl relative">
